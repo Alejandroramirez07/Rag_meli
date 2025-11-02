@@ -1,36 +1,64 @@
-# app.py
 import streamlit as st
-from rag_pipeline import create_or_load_vectorstore, create_qa_chain
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
+from langchain_ollama import OllamaLLM
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
 
-st.set_page_config(page_title="Chatbot de Catálogo", layout="wide")
-st.title("🛍️ Chatbot de Catálogo (Mercado Libre + Shopify)")
+# --- Configuración de la app
+st.set_page_config(page_title="🛍️ Asistente de Catálogo Meli", layout="centered")
+st.title("🛍️ Asistente del Catálogo MercadoLibre")
 
-if "qa_chain" not in st.session_state:
-    with st.spinner("Cargando índice (si es la primera vez, puede tardar un poco)..."):
-        vectordb = create_or_load_vectorstore(recreate=False)
-        st.session_state.qa_chain = create_qa_chain(vectordb)
-        st.success("Índice cargado.")
+# --- 1️⃣ Embeddings
+@st.cache_resource
+def get_embeddings():
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-qa = st.session_state.qa_chain
+# --- 2️⃣ Carga del vector store (asegúrate de tener ./chroma_db generado)
+@st.cache_resource
+def get_vectorstore():
+    embeddings = get_embeddings()
+    return Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
 
-col1, col2 = st.columns([3,1])
-with col1:
-    user_q = st.text_input("Haz una pregunta sobre tu catálogo:", key="query_input")
-    if user_q:
-        with st.spinner("Buscando respuesta..."):
-            out = qa({"query": user_q})
-            answer = out["result"]
-            st.markdown("**Respuesta:**")
-            st.write(answer)
-            if out.get("source_documents"):
-                st.markdown("**Documentos fuente (IDs):**")
-                ids = [d.metadata.get("source_id") for d in out["source_documents"]]
-                st.write(ids)
-with col2:
-    st.markdown("**Sugerencias de ejemplo**")
-    st.write("- ¿Qué diferencia hay entre el modelo A y el modelo B?")
-    st.write("- ¿Qué productos tienen envío gratis?")
-    st.write("- ¿Puedo cambiar el color después de comprar?")
+# --- 3️⃣ Cargar el modelo local
+@st.cache_resource
+def get_llm():
+    return OllamaLLM(model="mistral", temperature=0.1)
 
-st.markdown("---")
-st.info("Para regenerar la base de conocimiento, borra la carpeta 'chroma_db' y vuelve a cargar la app.")
+# --- 4️⃣ Construir el RAG pipeline
+@st.cache_resource
+def build_rag_chain():
+    vectorstore = get_vectorstore()
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+    llm = get_llm()
+
+    prompt = ChatPromptTemplate.from_template("""
+    Eres un asistente experto en el catálogo de productos.
+    Responde solo con base en la información del contexto.
+    Si no sabes la respuesta, di: "No tengo esa información en el catálogo."
+
+    Contexto:
+    {context}
+
+    Pregunta:
+    {question}
+
+    Respuesta en español:
+    """)
+
+    return (
+        {"context": retriever, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+    )
+
+rag_chain = build_rag_chain()
+
+# --- 5️⃣ Interfaz de usuario
+query = st.text_input("Haz tu pregunta sobre los productos:")
+
+if query:
+    with st.spinner("Buscando en el catálogo..."):
+        response = rag_chain.invoke(query)
+    st.write("### 💬 Respuesta:")
+    st.success(response)
