@@ -35,7 +35,7 @@ def get_llm():
 @st.cache_resource
 def build_rag_chain():
     vectorstore = get_vectorstore()
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
     llm = get_llm()
 
     prompt = ChatPromptTemplate.from_template("""
