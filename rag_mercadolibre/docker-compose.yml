@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  # -----------------------------------------------------
+  # 1. SERVICIO DE LA APP PRINCIPAL (Streamlit + RAG + Selenium Checker)
+  # -----------------------------------------------------
+  app:
+    build: .
+    container_name: meli_asistente_rag
+    # Abrir el puerto de Streamlit al host
+    ports:
+      - "8501:8501"
+    # Montar el directorio actual para desarrollo (opcional)
+    # volumes:
+    #   - .:/app 
+    
+    # Depende de que Ollama esté corriendo para iniciar la cadena RAG
+    depends_on:
+      - ollama
+      
+    environment:
+      # CRÍTICO: Establece la URL de Ollama para que langchain_ollama lo encuentre.
+      OLLAMA_HOST: http://ollama:11434
+      # CRÍTICO: Deshabilita el modo headless de Chrome para que Selenium pueda funcionar dentro del contenedor
+      # El navegador de Selenium debe saber dónde conectarse.
+      SELENIUM_REMOTE_URL: "http://localhost:4444/wd/hub" # Si no se usa grid, déjalo así
+
+    # Comando para iniciar la aplicación Streamlit
+    command: streamlit run main_workflow.py --server.port 8501 --server.enableCORS true
+
+  # -----------------------------------------------------
+  # 2. SERVICIO DE OLLAMA (LLM)
+  # -----------------------------------------------------
+  ollama:
+    container_name: ollama_server
+    # Usa la imagen oficial de Ollama
+    image: ollama/ollama
+    # Ollama requiere acceso a la GPU para un rendimiento óptimo (descomentar si tienes GPU)
+    # devices:
+    #   - /dev/kfd
+    #   - /dev/dri
+    # Añadir el puerto por defecto de Ollama
+    ports:
+      - "11434:11434"
+    # Comando para asegurar que el modelo 'mistral' esté descargado al inicio
+    # Esto previene el error "model not found" cuando la app intenta cargarlo.
+    command: /usr/bin/ollama serve
+    
+    # Esperar 30 segundos y luego descargar el modelo
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    
+    # Ejecutar la descarga del modelo después de que el servidor esté listo
+    # En un entorno real, ejecutarías 'ollama pull mistral' en un paso separado.
+    # Para simplicidad en docker-compose, asumiremos que el servidor lo descargará 
+    # automáticamente la primera vez que la app lo solicite si no está.
+    # No obstante, una buena práctica sería ejecutar ollama pull mistral aquí.
+    # command: /bin/bash -c "ollama pull mistral && ollama serve"
+    
