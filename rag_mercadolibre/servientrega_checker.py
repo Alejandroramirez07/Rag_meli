@@ -11,14 +11,13 @@ def check_servientrega_status(tracking_number):
     Automates the browser to check the Servientrega tracking status 
     by navigating directly to the results URL.
     """
-    # 💥 NEW STRATEGY: Construct the destination URL directly
-    # We use 'Guia' as confirmed from your browser inspection.
+    
     url = f"https://mobile.servientrega.com/WebSitePortal/RastreoEnvioDetalle.html?Guia={tracking_number}"
     
     # Configuration for running the Chrome browser
     options = ChromeOptions() 
-    # UNCOMMENT THIS LINE if the script works in the next test run!
-    # options.add_argument('--headless')      
+    
+    options.add_argument('--headless')      
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument("--window-size=1920,1080")

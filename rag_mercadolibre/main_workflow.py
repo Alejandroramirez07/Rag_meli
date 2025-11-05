@@ -1,37 +1,36 @@
 import streamlit as st
-import re  # Required for finding the tracking number pattern
+import re 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 
-# Import your corrected Servientrega checker function
+# Import Servientrega checker function
 from servientrega_checker import check_servientrega_status 
 
 # --- Configuración de la app
 st.set_page_config(page_title="🛍️ Asistente de Catálogo Meli", layout="centered")
 st.title("🛍️ Asistente del Catálogo MercadoLibre")
 
-# --- 1️⃣ Embeddings
+# ---  Embeddings
 @st.cache_resource
 def get_embeddings():
-    # Asegúrate de que esta librería esté instalada: pip install sentence-transformers
+    
     return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# --- 2️⃣ Carga del vector store (asegúrate de tener ./chroma_db generado)
+# ---  Carga del vector store (asegúrate de tener ./chroma_db generado)
 @st.cache_resource
 def get_vectorstore():
     embeddings = get_embeddings()
     return Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
 
-# --- 3️⃣ Cargar el modelo local
+# ---  Cargar el modelo local
 @st.cache_resource
 def get_llm():
-    # Asegúrate de que Ollama esté corriendo y el modelo 'mistral' esté descargado
-    return OllamaLLM(model="mistral", temperature=0.1)
+    return OllamaLLM(model="mistral", temperature=0.3)
 
-# --- 4️⃣ Construir el RAG pipeline
+# ---  Construir el RAG pipeline
 @st.cache_resource
 def build_rag_chain():
     vectorstore = get_vectorstore()
@@ -41,7 +40,8 @@ def build_rag_chain():
     prompt = ChatPromptTemplate.from_template("""
     Eres un asistente experto en el catálogo de productos.
     Responde solo con base en la información del contexto.
-    Si no sabes la respuesta, di: "No tengo esa información en el catálogo."
+    Si no sabes la respuesta, realiza un resumen de los productos en el catálogo.
+    Lo mismo aplica si la consulta es vaga o general. Si hablan de productos, también se refieren a figuras"
 
     Contexto:
     {context}
@@ -60,7 +60,7 @@ def build_rag_chain():
 
 rag_chain = build_rag_chain()
 
-# --- 5️⃣ Interfaz de usuario y Lógica de Ramificación
+# ---  Interfaz de usuario y Lógica de Ramificación
 query = st.text_input("Haz tu pregunta sobre los productos o el estado de tu envío (ej: rastrea guía 2259180939):")
 
 if query:
@@ -75,7 +75,7 @@ if query:
     
     # --- RAMIFICACIÓN DE EJECUCIÓN ---
     if tracking_number_match:
-        # ✅ Caso A: Un número de rastreo de 10 dígitos fue encontrado. 
+        #  Caso A: Un número de rastreo de 10 dígitos fue encontrado. 
         # Ejecutar el checker (PRIORIDAD AL RASTREO).
         tracking_number = tracking_number_match.group(0)
         
