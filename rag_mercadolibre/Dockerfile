@@ -1,42 +1,47 @@
-# Usamos una imagen base que ya incluye Java, Chrome y Chromedriver 
-# para que Selenium pueda ejecutar el checker de Servientrega.
-FROM selenium/standalone-chrome:latest
+# USAR UNA IMAGEN BASE QUE YA TIENE PYTHON Y MUCHAS LIBRERÍAS DE DL (como PyTorch)
+# Esto acelera enormemente el paso 5 de la construcción.
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
-# Cambiar al usuario root para instalar paquetes
-USER root
-
-# Instalar Python 3.11, pip y dependencias necesarias para LLM/RAG
+# --- 1. Instalar Google Chrome y dependencias (Para Selenium) ---
+# Instalar dependencias necesarias para Chrome (basado en Ubuntu)
 RUN apt-get update && apt-get install -y \
-    python3.11 \
-    python3-pip \
-    python3.11-venv \
-    build-essential \
-    git \
+    wget \
+    gnupg \
+    libnss3 \
+    libgconf-2-4 \
+    --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Crear y activar un entorno virtual para aislar dependencias
-ENV VIRTUAL_ENV=/opt/venv
-RUN python3.11 -m venv $VIRTUAL_ENV
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+# Instalar Google Chrome
+# Nota: La base de NVIDIA ya tiene un entorno Linux, por lo que podemos instalar Chrome.
+RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+    apt install -y ./google-chrome-stable_current_amd64.deb && \
+    rm google-chrome-stable_current_amd64.deb
 
-# Instalar las librerías de Python
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Directorio de trabajo en el contenedor
+# --- 2. Entorno Python y Dependencias ---
+# La imagen base ya tiene Python y Pip.
 WORKDIR /app
 
-# Copiar el código de la aplicación (asumiendo main_workflow.py y servientrega_checker.py)
+# Instalar dependencias de Python (debe ser muy rápido, ya que torch ya está preinstalado)
+COPY requirements.txt .
+# Usamos --break-system-packages para instalar paquetes en el Python del sistema de la imagen base
+RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
+
+# --- 3. Copiar la Aplicación ---
 COPY main_workflow.py /app/
 COPY servientrega_checker.py /app/
-
-# IMPORTANTE: Copiar la base de datos vectorial pre-construida (si existe)
-# Asume que ya tienes el folder ./chroma_db creado localmente
+# CRÍTICO: Copiar la base de datos vectorial
 COPY chroma_db /app/chroma_db/
 
-# El puerto por defecto de Streamlit
+# --- 4. Configuración de Entorno para Streamlit y Selenium ---
+# Asegurar que los binarios de Chrome/Chromedriver estén en el PATH
+ENV PATH="/usr/bin/:$PATH"
+# CRÍTICO: Configurar la URL de Ollama para la app
+ENV OLLAMA_HOST "http://ollama:11434"
+
 EXPOSE 8501
 
-# Comando para ejecutar la aplicación
-# NOTA: La variable de entorno OLLAMA_HOST debe ser definida en docker-compose
-CMD ["streamlit", "run", "main_workflow.py"]
+# Comando para iniciar la aplicación Streamlit
+CMD ["streamlit", "run", "main_workflow.py", "--server.port", "8501", "--server.enableCORS", "true"]
+
+
