@@ -1,8 +1,13 @@
 streamlit
-langchain-huggingface
-langchain-chroma
-langchain-ollama
+langchain
+langchain-google-genai
+google-genai
+langchain-weaviate
 langchain-core
-sentence-transformers
 selenium
 python-dotenv
+pandas
+openpyxl
+weaviate-client>=4.6.0  # Forzar una versión reciente que use weaviate.collections
+langchain-text-splitters
+langchain-community

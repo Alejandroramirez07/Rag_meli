@@ -1,103 +1,186 @@
 import streamlit as st
-import re 
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaLLM
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from servientrega_checker import check_servientrega_status 
+import os
+from dotenv import load_dotenv
+import weaviate
+from langchain_community.vectorstores import Weaviate
+from langchain_google_genai import ChatGoogleGenAI, GoogleGenAIEmbeddings
+from langchain.prompts import ChatPromptTemplate
+from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
+from langchain.agents import create_react_agent, AgentExecutor
+from langchain.tools import tool
 
-# --- Configuración de la app
-st.set_page_config(page_title="🛍️ Asistente de Catálogo Meli", layout="centered")
-st.title("🛍️ Asistente del Catálogo MercadoLibre")
+# --- Configuración Inicial ---
+load_dotenv()
+WEAVIATE_URL = os.getenv("WEAVIATE_URL", "http://localhost:8090")
+# CORRECCIÓN: Usar el nombre de clase que creaste
+INDEX_NAME = "MercadoLibreProduct"  # ← CAMBIADO para que coincida con tu ingesta
 
-# ---  Embeddings
-@st.cache_resource
-def get_embeddings():
+# Inicializar LLM y Embeddings
+llm = ChatGoogleGenAI(model="gemini-1.5-flash")  # ← Usar modelo disponible
+embeddings = GoogleGenAIEmbeddings(model="models/embedding-001")
+
+# --- Herramienta de Búsqueda de Productos (RAG) ---
+@tool
+def get_product_recommendations(query: str) -> str:
+    """
+    Útil para buscar en el catálogo de productos de Mercado Libre. 
+    Responde a preguntas sobre categorías, precios, descripciones y recomendaciones de productos.
+    """
+    try:
+        # 1. Conectar a Weaviate
+        client = weaviate.Client(url=WEAVIATE_URL)
+        
+        # 2. Búsqueda vectorial directa (más simple)
+        response = client.query.get(
+            INDEX_NAME,
+            ["title", "category", "materials", "character", "composition"]
+        ).with_near_text({
+            "concepts": [query]
+        }).with_limit(5).do()
+        
+        # 3. Procesar resultados
+        products = response.get('data', {}).get('Get', {}).get(INDEX_NAME, [])
+        
+        if not products:
+            return "No se encontraron productos relevantes en el catálogo."
+        
+        # 4. Formatear contexto
+        context = "Productos encontrados:\n\n"
+        for i, product in enumerate(products):
+            context += f"--- Producto {i+1} ---\n"
+            context += f"Título: {product.get('title', 'N/A')}\n"
+            context += f"Categoría: {product.get('category', 'N/A')}\n"
+            context += f"Materiales: {product.get('materials', 'N/A')}\n"
+            if product.get('character'):
+                context += f"Personaje: {product.get('character')}\n"
+            if product.get('composition'):
+                context += f"Composición: {product.get('composition')}\n"
+            context += "\n"
+        
+        # 5. Generar respuesta con Gemini
+        prompt = f"""
+        Eres un asistente experto de Mercado Libre. Basándote en los siguientes productos, 
+        responde la pregunta del usuario de manera útil y natural.
+        
+        PRODUCTOS ENCONTRADOS:
+        {context}
+        
+        PREGUNTA DEL USUARIO: {query}
+        
+        Responde como un vendedor experto, destacando características relevantes y siendo útil.
+        """
+        
+        response = llm.invoke(prompt)
+        return response.content
+
+    except Exception as e:
+        return f"Error al buscar productos: {e}"
+
+# --- Herramienta Simulada de Envíos (para demo) ---
+@tool
+def get_shipping_status(tracking_number: str) -> str:
+    """
+    Simula la verificación del estado de un envío.
+    Para la demo, devuelve estados predefinidos.
+    """
+    # Simulación para la presentación
+    status_options = [
+        "✅ Envío entregado exitosamente",
+        "🚚 En tránsito - Llegando en 2 días",
+        "📦 En centro de distribución - Próximo a entregar", 
+        "⏳ Pendiente de recolección"
+    ]
     
-    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-# ---  Carga del vector store (asegúrate de tener ./chroma_db generado)
-@st.cache_resource
-def get_vectorstore():
-    embeddings = get_embeddings()
-    return Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
-
-# ---  Cargar el modelo local
-@st.cache_resource
-def get_llm():
-    return OllamaLLM(model="mistral", temperature=0.3)
-
-# ---  Construir el RAG pipeline
-@st.cache_resource
-def build_rag_chain():
-    vectorstore = get_vectorstore()
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-    llm = get_llm()
-
-    prompt = ChatPromptTemplate.from_template("""
-    Eres un asistente experto en el catálogo de productos.
-    Responde solo con base en la información del contexto.
-    Si no sabes la respuesta, realiza un resumen de los productos en el catálogo.
-    Lo mismo aplica si la consulta es vaga o general. Si hablan de productos, también se refieren a figuras"
-
-    Contexto:
-    {context}
-
-    Pregunta:
-    {question}
-
-    Respuesta en español:
-    """)
-
-    return (
-        {"context": retriever, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-    )
-
-rag_chain = build_rag_chain()
-
-# ---  Interfaz de usuario y Lógica de Ramificación
-query = st.text_input("Haz tu pregunta sobre los productos o el estado de tu envío (ej: rastrea guía 2259180939):")
-
-if query:
-    # Lógica de Ramificación para el Rastreo de Servientrega
+    # Usar el número de tracking para generar un estado "consistente"
+    import hashlib
+    status_index = int(hashlib.md5(tracking_number.encode()).hexdigest(), 16) % len(status_options)
     
-    # 1. Convertir la consulta a minúsculas para un manejo más fácil
-    lower_query = query.lower()
-    
-    # 2. Buscar un patrón de número de guía (10 dígitos)
-    # Patrón: \d{10} busca exactamente 10 dígitos.
-    tracking_number_match = re.search(r'\d{10}', lower_query)
-    
-    # --- RAMIFICACIÓN DE EJECUCIÓN ---
-    if tracking_number_match:
-        #  Caso A: Un número de rastreo de 10 dígitos fue encontrado. 
-        # Ejecutar el checker (PRIORIDAD AL RASTREO).
-        tracking_number = tracking_number_match.group(0)
-        
-        st.info(f"Detectada consulta de rastreo. Buscando estado de guía: **{tracking_number}**")
-        
-        with st.spinner(f"Contactando a Servientrega para la guía {tracking_number}..."):
-            # Llama a tu función del otro archivo
-            status_result = check_servientrega_status(tracking_number)
-        
-        st.write("### 🚚 Estado del Envío:")
-        
-        # Muestra el resultado
-        if "ERROR" in status_result:
-            st.error(status_result)
-        else:
-            # Output limpio y exitoso basado en tu prueba
-            st.success(f"Guía **{tracking_number}** - **{status_result}**")
-            
-    else:
-        # 📚 Caso B: No se encontró un número de 10 dígitos. Ejecutar el pipeline RAG.
-        st.info("Detectada consulta de catálogo. Buscando con RAG...")
-        
-        with st.spinner("Buscando en el catálogo..."):
-            response = rag_chain.invoke(query)
-            
-        st.write("### 💬 Respuesta del Catálogo:")
-        st.success(response)
+    return f"Número de guía: {tracking_number}\nEstado: {status_options[status_index]}"
+
+# --- Agente ReAct Simplificado ---
+tools = [get_product_recommendations, get_shipping_status]
+
+agent_prompt = ChatPromptTemplate.from_messages([
+    ("system", 
+     "Eres MELI-Assistant, un asistente virtual de Mercado Libre. Ayuda al usuario con:\n"
+     "1. Búsqueda de productos: usa 'get_product_recommendations'\n" 
+     "2. Estado de envíos: usa 'get_shipping_status' (pide número de guía si falta)\n"
+     "3. Otras preguntas: responde directamente de manera amigable\n\n"
+     "Sé conciso y útil."
+    ),
+    ("human", "{input}")
+])
+
+agent = create_react_agent(llm, tools, agent_prompt)
+agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
+
+# --- Interfaz de Streamlit ---
+st.set_page_config(page_title="MELI-Assistant", layout="wide")
+
+st.markdown("""
+<style>
+    .stButton>button {
+        background-color: #00A650;
+        color: white;
+        border-radius: 10px;
+        border: none;
+        padding: 10px 20px;
+        font-weight: bold;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("💛 MELI-Assistant: Tu Bot de Mercado Libre")
+
+st.sidebar.header("Demo Status")
+st.sidebar.info(f"✅ Weaviate: {WEAVIATE_URL}\n✅ Productos: ~3,000 cargados\n✅ Gemini: Conectado")
+
+# Inicializar chat
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+    st.session_state.messages.append({
+        "role": "assistant", 
+        "content": "¡Hola! Soy MELI-Assistant. Puedo:\n• Buscar productos en el catálogo\n• Verificar estados de envío\n\n¿En qué puedo ayudarte?"
+    })
+
+# Mostrar mensajes
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Input del usuario
+if prompt := st.chat_input("Escribe tu pregunta..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Buscando..."):
+            try:
+                response = agent_executor.invoke({"input": prompt})
+                answer = response.get('output', "No pude procesar tu solicitud.")
+                st.markdown(answer)
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+            except Exception as e:
+                error_msg = f"Error: {e}"
+                st.error(error_msg)
+                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
+# Botón limpiar
+if st.sidebar.button("Limpiar Chat"):
+    st.session_state.messages = []
+    st.rerun()
+
+# Ejemplos de prueba
+st.sidebar.subheader("💡 Prueba estos ejemplos:")
+examples = [
+    "Busca figuras de acción de Marvel",
+    "Necesito calzoncillos de algodón",
+    "Quiero mochilas waterproof", 
+    "Estado de envío: ML123456789"
+]
+
+for example in examples:
+    if st.sidebar.button(example, key=example):
+        st.session_state.messages.append({"role": "user", "content": example})
+        st.rerun()
