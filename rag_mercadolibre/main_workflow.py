@@ -1,186 +1,330 @@
-import streamlit as st
 import os
+import streamlit as st
 from dotenv import load_dotenv
-import weaviate
-from langchain_community.vectorstores import Weaviate
-from langchain_google_genai import ChatGoogleGenAI, GoogleGenAIEmbeddings
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
-from langchain.agents import create_react_agent, AgentExecutor
-from langchain.tools import tool
+import requests
+import re
+from embedding_utils import get_embedding
 
-# --- Configuración Inicial ---
+# --- Import the Servientrega checker ---
+from servientrega_checker import check_servientrega_status
+
+# --- Load environment variables ---
 load_dotenv()
-WEAVIATE_URL = os.getenv("WEAVIATE_URL", "http://localhost:8090")
-# CORRECCIÓN: Usar el nombre de clase que creaste
-INDEX_NAME = "MercadoLibreProduct"  # ← CAMBIADO para que coincida con tu ingesta
 
-# Inicializar LLM y Embeddings
-llm = ChatGoogleGenAI(model="gemini-1.5-flash")  # ← Usar modelo disponible
-embeddings = GoogleGenAIEmbeddings(model="models/embedding-001")
+# --- Weaviate Configuration ---
+WEAVIATE_AVAILABLE = False
+try:
+    from weaviate import WeaviateClient
+    from weaviate.connect import ConnectionParams
+    WEAVIATE_AVAILABLE = True
+except ImportError as e:
+    st.sidebar.warning(f"❌ Weaviate client not available: {e}")
 
-# --- Herramienta de Búsqueda de Productos (RAG) ---
-@tool
-def get_product_recommendations(query: str) -> str:
-    """
-    Útil para buscar en el catálogo de productos de Mercado Libre. 
-    Responde a preguntas sobre categorías, precios, descripciones y recomendaciones de productos.
-    """
-    try:
-        # 1. Conectar a Weaviate
-        client = weaviate.Client(url=WEAVIATE_URL)
-        
-        # 2. Búsqueda vectorial directa (más simple)
-        response = client.query.get(
-            INDEX_NAME,
-            ["title", "category", "materials", "character", "composition"]
-        ).with_near_text({
-            "concepts": [query]
-        }).with_limit(5).do()
-        
-        # 3. Procesar resultados
-        products = response.get('data', {}).get('Get', {}).get(INDEX_NAME, [])
-        
-        if not products:
-            return "No se encontraron productos relevantes en el catálogo."
-        
-        # 4. Formatear contexto
-        context = "Productos encontrados:\n\n"
-        for i, product in enumerate(products):
-            context += f"--- Producto {i+1} ---\n"
-            context += f"Título: {product.get('title', 'N/A')}\n"
-            context += f"Categoría: {product.get('category', 'N/A')}\n"
-            context += f"Materiales: {product.get('materials', 'N/A')}\n"
-            if product.get('character'):
-                context += f"Personaje: {product.get('character')}\n"
-            if product.get('composition'):
-                context += f"Composición: {product.get('composition')}\n"
-            context += "\n"
-        
-        # 5. Generar respuesta con Gemini
-        prompt = f"""
-        Eres un asistente experto de Mercado Libre. Basándote en los siguientes productos, 
-        responde la pregunta del usuario de manera útil y natural.
-        
-        PRODUCTOS ENCONTRADOS:
-        {context}
-        
-        PREGUNTA DEL USUARIO: {query}
-        
-        Responde como un vendedor experto, destacando características relevantes y siendo útil.
-        """
-        
-        response = llm.invoke(prompt)
-        return response.content
+# --- USE LOCALHOST:8090 (where the data is) ---
+WEAVIATE_CLASS_NAME = "MercadoLibreProduct"
+WEAVIATE_HOST = "localhost"  # ← CONNECT TO HOST, NOT CONTAINER
+WEAVIATE_PORT = 8090         # ← HOST PORT
 
-    except Exception as e:
-        return f"Error al buscar productos: {e}"
-
-# --- Herramienta Simulada de Envíos (para demo) ---
-@tool
-def get_shipping_status(tracking_number: str) -> str:
-    """
-    Simula la verificación del estado de un envío.
-    Para la demo, devuelve estados predefinidos.
-    """
-    # Simulación para la presentación
-    status_options = [
-        "✅ Envío entregado exitosamente",
-        "🚚 En tránsito - Llegando en 2 días",
-        "📦 En centro de distribución - Próximo a entregar", 
-        "⏳ Pendiente de recolección"
-    ]
-    
-    # Usar el número de tracking para generar un estado "consistente"
-    import hashlib
-    status_index = int(hashlib.md5(tracking_number.encode()).hexdigest(), 16) % len(status_options)
-    
-    return f"Número de guía: {tracking_number}\nEstado: {status_options[status_index]}"
-
-# --- Agente ReAct Simplificado ---
-tools = [get_product_recommendations, get_shipping_status]
-
-agent_prompt = ChatPromptTemplate.from_messages([
-    ("system", 
-     "Eres MELI-Assistant, un asistente virtual de Mercado Libre. Ayuda al usuario con:\n"
-     "1. Búsqueda de productos: usa 'get_product_recommendations'\n" 
-     "2. Estado de envíos: usa 'get_shipping_status' (pide número de guía si falta)\n"
-     "3. Otras preguntas: responde directamente de manera amigable\n\n"
-     "Sé conciso y útil."
-    ),
-    ("human", "{input}")
-])
-
-agent = create_react_agent(llm, tools, agent_prompt)
-agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
-
-# --- Interfaz de Streamlit ---
-st.set_page_config(page_title="MELI-Assistant", layout="wide")
-
-st.markdown("""
-<style>
-    .stButton>button {
-        background-color: #00A650;
-        color: white;
-        border-radius: 10px;
-        border: none;
-        padding: 10px 20px;
-        font-weight: bold;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-st.title("💛 MELI-Assistant: Tu Bot de Mercado Libre")
-
-st.sidebar.header("Demo Status")
-st.sidebar.info(f"✅ Weaviate: {WEAVIATE_URL}\n✅ Productos: ~3,000 cargados\n✅ Gemini: Conectado")
-
-# Inicializar chat
+# --- 1. Chat History Initialization ---
 if "messages" not in st.session_state:
-    st.session_state.messages = []
-    st.session_state.messages.append({
-        "role": "assistant", 
-        "content": "¡Hola! Soy MELI-Assistant. Puedo:\n• Buscar productos en el catálogo\n• Verificar estados de envío\n\n¿En qué puedo ayudarte?"
-    })
+    st.session_state["messages"] = [
+        {"role": "assistant", "content": "Hello! I'm your Meli Catalog Assistant. I can help you search for products using semantic search or track your Servientrega shipments. How can I assist you today?"}
+    ]
 
-# Mostrar mensajes
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+def test_weaviate_connection():
+    """Simple HTTP connection test to Weaviate."""
+    try:
+        url = f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}/v1/.well-known/ready"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return True, f"✅ Weaviate is responding at {WEAVIATE_HOST}:{WEAVIATE_PORT}"
+        else:
+            return False, f"❌ Weaviate responded with error: {response.status_code}"
+    except Exception as e:
+        return False, f"❌ Cannot connect to Weaviate: {str(e)}"
 
-# Input del usuario
-if prompt := st.chat_input("Escribe tu pregunta..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+def check_weaviate_data():
+    """Verify if there is data in Weaviate."""
+    try:
+        url = f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}/v1/objects?class={WEAVIATE_CLASS_NAME}&limit=1"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            total_count = data.get('totalResults', 0)
+            if total_count > 0:
+                # Get exact count
+                count_url = f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}/v1/objects?class={WEAVIATE_CLASS_NAME}&include=classification"
+                count_response = requests.get(count_url, timeout=10)
+                if count_response.status_code == 200:
+                    count_data = count_response.json()
+                    exact_count = count_data.get('totalResults', total_count)
+                    return True, f"📊 {exact_count} products found"
+            return False, "📭 0 products found"
+        return False, f"❌ Error verifying data: {response.status_code}"
+    except Exception as e:
+        return False, f"❌ Error checking data: {str(e)}"
 
-    with st.chat_message("assistant"):
-        with st.spinner("Buscando..."):
-            try:
-                response = agent_executor.invoke({"input": prompt})
-                answer = response.get('output', "No pude procesar tu solicitud.")
-                st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
-            except Exception as e:
-                error_msg = f"Error: {e}"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+def initialize_weaviate_client():
+    """Initialize Weaviate client."""
+    if not WEAVIATE_AVAILABLE:
+        return None, "Weaviate client is not installed", False
+    
+    # Complete diagnostic
+    connection_ok, connection_msg = test_weaviate_connection()
+    if not connection_ok:
+        return None, connection_msg, False
+    
+    data_ok, data_msg = check_weaviate_data()
+    
+    try:
+        connection_params = ConnectionParams.from_params(
+            http_host=WEAVIATE_HOST,
+            http_port=WEAVIATE_PORT,
+            http_secure=False,
+            grpc_host=WEAVIATE_HOST,
+            grpc_port=50051,
+            grpc_secure=False,
+        )
+        
+        client = WeaviateClient(connection_params)
+        client.connect()
+        
+        if client.is_ready():
+            status_msg = f"✅ Connected to {WEAVIATE_HOST}:{WEAVIATE_PORT}"
+            if data_ok:
+                status_msg += f" - {data_msg}"
+            else:
+                status_msg += " - ⚠️ No data"
+            return client, status_msg, data_ok
+        else:
+            return None, "❌ Weaviate is not ready", False
+            
+    except Exception as e:
+        return None, f"❌ Connection error: {str(e)}", False
 
-# Botón limpiar
-if st.sidebar.button("Limpiar Chat"):
-    st.session_state.messages = []
-    st.rerun()
+def search_products_semantic(client, query: str, limit: int = 10):
+    """Search products using semantic vector search."""
+    try:
+        collection = client.collections.get(WEAVIATE_CLASS_NAME)
+        
+        # Get query embedding using the same ingestion function
+        query_vector = get_embedding(query)
+        if not query_vector:
+            st.error("❌ Could not generate embedding for the query")
+            return []
+        
+        # Search using vector directly
+        response = collection.query.near_vector(
+            near_vector=query_vector,
+            limit=limit,
+            return_metadata=["distance", "score"]
+        )
+        
+        return response.objects if response.objects else []
+        
+    except Exception as e:
+        st.error(f"Error in semantic search: {e}")
+        return []
+    
+def format_product_display(product):
+    """Format product information for display."""
+    props = product.properties
+    
+    display_text = f"### 🎯 {props.get('title', 'Product without title')}\n"
+    
+    # Main information
+    if props.get('character'):
+        display_text += f"**🧙 Character:** {props['character']}\n"
+    
+    if props.get('category'):
+        display_text += f"**📂 Category:** {props['category']}\n"
+    
+    if props.get('materials'):
+        display_text += f"**🔧 Materials:** {props['materials']}\n"
+    
+    # Figure specifications
+    if props.get('is_articulated'):
+        display_text += "**🔄 Type:** Articulated Figure\n"
+    
+    if props.get('is_collectible'):
+        display_text += "**⭐ Collectible:** Yes\n"
+    
+    # Dimensions and weight
+    if props.get('height_cm') and props['height_cm'] not in ['nan', 'None']:
+        display_text += f"**📏 Height:** {props['height_cm']}cm\n"
+    
+    if props.get('weight_g') and props['weight_g'] not in ['nan', 'None']:
+        display_text += f"**⚖️ Weight:** {props['weight_g']}g\n"
+    
+    # Search similarity
+    if hasattr(product, 'metadata'):
+        similarity = product.metadata.distance if hasattr(product.metadata, 'distance') else None
+        if similarity:
+            display_text += f"**🎯 Relevance:** {similarity:.3f}\n"
+    
+    display_text += "---"
+    return display_text
 
-# Ejemplos de prueba
-st.sidebar.subheader("💡 Prueba estos ejemplos:")
-examples = [
-    "Busca figuras de acción de Marvel",
-    "Necesito calzoncillos de algodón",
-    "Quiero mochilas waterproof", 
-    "Estado de envío: ML123456789"
-]
+def format_search_results(results, query):
+    """Format search results for chat."""
+    if not results:
+        return "❌ I didn't find any products matching your search. Try other terms."
+    
+    response = f"🔍 **Found {len(results)} products for '{query}':**\n\n"
+    
+    for i, product in enumerate(results, 1):
+        props = product.properties
+        response += f"**{i}. {props.get('title', 'Product without title')}**\n"
+        
+        if props.get('character'):
+            response += f"   • Character: {props['character']}\n"
+        if props.get('category'):
+            response += f"   • Category: {props['category']}\n"
+        if props.get('materials'):
+            response += f"   • Materials: {props['materials']}\n"
+        
+        response += "\n"
+    
+    response += "Are you interested in any particular one or would you like to search for something else?"
+    return response
 
-for example in examples:
-    if st.sidebar.button(example, key=example):
-        st.session_state.messages.append({"role": "user", "content": example})
-        st.rerun()
+def main():
+    """Main Streamlit application."""
+    st.set_page_config(
+        page_title="MercadoLibre Catalog - Vector Search", 
+        layout="wide",
+        page_icon="🛍️"
+    )
+    
+    st.title("🤖 Meli Catalog Assistant")
+    st.caption("Ask me about products or track a shipment (e.g.: track 2259180939)")
+    
+    # Sidebar with diagnostics
+    with st.sidebar:
+        st.title("🔧 Diagnostics")
+        
+        # Connection information
+        st.markdown("### 🔌 Configuration")
+        st.markdown(f"**Host:** `{WEAVIATE_HOST}:{WEAVIATE_PORT}`")
+        st.markdown(f"**Class:** `{WEAVIATE_CLASS_NAME}`")
+        
+        # Real-time diagnostics
+        st.markdown("### 📊 Status")
+        connection_ok, connection_msg = test_weaviate_connection()
+        st.markdown(f"**Connection:** {connection_msg}")
+        
+        data_ok, data_msg = check_weaviate_data()
+        st.markdown(f"**Data:** {data_msg}")
+        
+        # Initialize client
+        client, client_msg, has_data = initialize_weaviate_client()
+        
+        if client and has_data:
+            st.success("🚀 System ready for searches")
+            st.info("📦 Shipment tracking available")
+        elif client and not has_data:
+            st.warning("⚠️ Connected but no data")
+        else:
+            st.error("❌ System not available")
+        
+        # Clear history button
+        st.markdown("---")
+        if st.button("🗑️ Clear Chat History", use_container_width=True):
+            st.session_state.messages = [
+                {"role": "assistant", "content": "Hello! The history has been cleared. How can I help you now?"}
+            ]
+            st.rerun()
+        
+        # Additional information
+        st.markdown("### 💡 Information")
+        st.markdown("- **Connection:** localhost:8090")
+        st.markdown("- **Embeddings:** Gemini AI")
+        st.markdown("- **Tracking:** Servientrega")
+
+    # --- 2. Render Previous Messages ---
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # --- 3. Handle New User Input ---
+    if prompt := st.chat_input("Type your question or tracking number here..."):
+        
+        # Add user message to history and display immediately
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.chat_message("user").write(prompt)
+
+        # Start container for assistant response
+        with st.chat_message("assistant"):
+            
+            # --- HYBRID BRANCHING LOGIC (Search or Tracking) ---
+            
+            # 1. Try to detect a Servientrega tracking number (10 digits)
+            tracking_number_match = re.search(r'\b(\d{10})\b', prompt)
+            
+            if tracking_number_match:
+                tracking_number = tracking_number_match.group(1)
+                
+                # --- Shipment Tracking Route ---
+                response_placeholder = st.empty()
+                response_placeholder.info(f"📦 Detected tracking number: **{tracking_number}**. Consulting Servientrega...")
+                
+                with st.spinner(f"🌐 Checking shipment status {tracking_number}..."):
+                    try:
+                        status_result = check_servientrega_status(tracking_number)
+                        final_response = f"**📦 Shipment Status {tracking_number}:**\n\n{status_result}"
+                        response_placeholder.success("✅ Search completed")
+
+                    except Exception as e:
+                        final_response = f"⚠️ There was an error trying to track the shipment {tracking_number}. Please verify the number and try again later.\n\n**Error detail:** {e}"
+                        response_placeholder.error("❌ Error in the tracking query")
+                
+                st.markdown(final_response)
+
+            else:
+                # --- Product Search Route ---
+                response_placeholder = st.empty()
+                
+                if not client or not has_data:
+                    final_response = "❌ Search service not available. Verify the Weaviate connection."
+                    response_placeholder.error("System not available")
+                else:
+                    response_placeholder.info("🔍 Searching in catalog...")
+                    
+                    try:
+                        with st.spinner("🧠 Performing semantic search..."):
+                            results = search_products_semantic(client, prompt, 8)
+                        
+                        final_response = format_search_results(results, prompt)
+                        response_placeholder.success("✅ Search completed")
+
+                    except Exception as e:
+                        final_response = f"⚠️ An error occurred while performing the search. Error: {e}"
+                        response_placeholder.error("❌ Error in search")
+                
+                st.markdown(final_response)
+
+            # --- 4. Store Assistant Response in History ---
+            st.session_state.messages.append({"role": "assistant", "content": final_response})
+
+    # --- Examples and information section ---
+    if len(st.session_state.messages) <= 2:  # Only show if chat is empty
+        st.markdown("---")
+        st.markdown("### 💡 Examples of what you can ask:")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**🔍 Product Search:**")
+            st.markdown("- Articulated anime figures")
+            st.markdown("- Cotton underwear")
+            st.markdown("- Laptop backpacks")
+            st.markdown("- Marvel products")
+        
+        with col2:
+            st.markdown("**📦 Shipment Tracking:**")
+            st.markdown("- 2259180939")
+            st.markdown("- Track 2259180939")
+            st.markdown("- Status of 2259180939")
+
+if __name__ == "__main__":
+    main()

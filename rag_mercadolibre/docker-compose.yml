@@ -1,20 +1,20 @@
 services:
   weaviate:
-    image: semitechnologies/weaviate:1.27.1 # 🚨 VERSIÓN ACTUALIZADA (Compatible con V4)
+    image: semitechnologies/weaviate:1.27.1 
     container_name: rag_mercadolibre_weaviate
     ports:
-      - "8090:8080" # <-- CAMBIO CLAVE: Usamos 8090 para evitar conflictos
-      - "50051:50051" # Puerto gRPC (Requerido por V4)
+      - "8090:8080" 
+      - "50051:50051" 
     environment:
-      QUERY_DEFAULTS_LIMIT: 25
-      AUTHENTICATION_APIKEY_ENABLED: 'false' # Autenticación deshabilitada
+      QUERY_DEFAULTS_LIMIT: 4300
+      AUTHENTICATION_APIKEY_ENABLED: 'false' 
       PERSISTENCE_ENABLED: 'true'
-      DEFAULT_VECTORIZER_MODULE: 'none' # Usamos nuestro propio vectorizador (Gemini)
-      ENABLE_MODULES: 'text2vec-google' # Habilitar el módulo de Google
-      GOOGLE_API_KEY: ${GEMINI_API_KEY} # Pasar la clave de API al módulo
+      DEFAULT_VECTORIZER_MODULE: 'none' 
+      ENABLE_MODULES: 'text2vec-google'
+      GOOGLE_API_KEY: ${GEMINI_API_KEY} 
       CLUSTER_HOSTNAME: 'node1'
     volumes:
-      - weaviate_data:/var/lib/weaviate
+      - weaviate_data:/var/lib/weaviate 
     networks:
       - rag_network
 
@@ -28,11 +28,11 @@ services:
     depends_on:
       - weaviate
     environment:
-      # La app dentro de Docker sigue viendo a Weaviate por el nombre del servicio (weaviate:8080)
+      
       WEAVIATE_URL: "http://weaviate:8080"
       WEAVIATE_HOST_DOCKER: "weaviate"
       WEAVIATE_PORT_DOCKER: 8080
-      # Pasar la clave de API de Gemini a la app de Streamlit
+      
       GEMINI_API_KEY: ${GEMINI_API_KEY}
     command: streamlit run main_workflow.py
     networks:
@@ -44,3 +44,4 @@ networks:
 
 volumes:
   weaviate_data:
+    driver: local

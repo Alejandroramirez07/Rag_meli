@@ -18,7 +18,7 @@ WORKDIR /app
 
 # Instalar dependencias de Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --default-timeout=600 --retries 5 -r requirements.txt
 
 # --- 4. Copiar la Aplicación ---
 COPY main_workflow.py /app/

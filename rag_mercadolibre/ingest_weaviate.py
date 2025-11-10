@@ -4,6 +4,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from tqdm import tqdm
 import time 
+from embedding_utils import get_embedding
 
 # --- 1. CONFIGURACIÓN DE DEPENDENCIAS EXTERNAS ---
 try:
@@ -191,12 +192,27 @@ def get_embedding(text: str, retries=3) -> list[float]:
     return None
 
 def create_schema(client: WeaviateClient):
-    """Crea la clase de Weaviate."""
+    """Crea la clase de Weaviate si no existe - VERSIÓN SEGURA que NUNCA borra datos."""
     
     if client.collections.exists(WEAVIATE_CLASS_NAME):
-        print(f"⚠️ Clase '{WEAVIATE_CLASS_NAME}' ya existe. Eliminándola...")
-        client.collections.delete(WEAVIATE_CLASS_NAME)
+        try:
+            collection = client.collections.get(WEAVIATE_CLASS_NAME)
+            count = collection.aggregate.over_all(total_count=True)
+            print(f"✅ Clase '{WEAVIATE_CLASS_NAME}' ya existe con {count.total_count} productos.")
+            
+            if count.total_count > 0:
+                print("🛑 DATOS EXISTENTES DETECTADOS - No se modificará el esquema para evitar pérdida de datos.")
+                return True
+            else:
+                print("ℹ️ Esquema existe pero vacío - Se puede recrear si es necesario")
+                # Preguntar antes de borrar
+                response = input("¿Borrar esquema vacío? (s/N): ")
+                if response.lower() != 's':
+                    return True
+        except Exception as e:
+            print(f"⚠️ Error verificando datos: {e}")
     
+    # Solo crear si no existe o el usuario aprobó borrar vacío
     properties_list = [
         Property(name=prop_config['name'], data_type=prop_config['data_type'])
         for prop_config in SCHEMA_MAP.values()
@@ -206,11 +222,9 @@ def create_schema(client: WeaviateClient):
         name=WEAVIATE_CLASS_NAME,
         properties=properties_list,
         vectorizer_config=Configure.Vectorizer.none(),
-        vector_index_config=Configure.VectorIndex.hnsw(
-            distance_metric=VectorDistances.COSINE,
-        ),
     )
     print(f"✅ Esquema '{WEAVIATE_CLASS_NAME}' creado")
+    return False
 
 def load_and_preprocess_data(file_path: str) -> pd.DataFrame:
     """Carga el archivo Excel, combina hojas y prepara los datos."""

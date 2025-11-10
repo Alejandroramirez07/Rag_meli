@@ -1,5 +1,5 @@
 streamlit
-langchain
+langchain==0.2.11
 langchain-google-genai
 google-genai
 langchain-weaviate
@@ -8,6 +8,6 @@ selenium
 python-dotenv
 pandas
 openpyxl
-weaviate-client>=4.6.0  # Forzar una versión reciente que use weaviate.collections
+weaviate-client>=4.6.0
 langchain-text-splitters
 langchain-community
