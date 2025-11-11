@@ -3,6 +3,9 @@ import streamlit as st
 from dotenv import load_dotenv
 import requests
 import re
+import hashlib
+import hmac
+import time
 from embedding_utils import get_embedding
 
 # --- Import the Servientrega checker ---
@@ -10,6 +13,90 @@ from servientrega_checker import check_servientrega_status
 
 # --- Load environment variables ---
 load_dotenv()
+
+# --- Authentication Configuration ---
+USER_CREDENTIALS = {
+    "admin": {
+        "password_hash": os.getenv("ADMIN_PASSWORD_HASH", ""),
+        "role": "admin"
+    },
+    "user": {
+        "password_hash": os.getenv("USER_PASSWORD_HASH", ""),
+        "role": "user"
+    }
+}
+
+# Session timeout in seconds (1 hour)
+SESSION_TIMEOUT = 3600
+
+def hash_password(password):
+    """Hash a password for storing."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(password, password_hash):
+    """Verify a stored password against one provided by user."""
+    return hmac.compare_digest(
+        hash_password(password),
+        password_hash
+    )
+
+def check_authentication():
+    """Check if user is authenticated and session is valid."""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'login_time' not in st.session_state:
+        st.session_state.login_time = 0
+    if 'username' not in st.session_state:
+        st.session_state.username = None
+    if 'role' not in st.session_state:
+        st.session_state.role = None
+    
+    # Check session timeout
+    if st.session_state.authenticated:
+        if time.time() - st.session_state.login_time > SESSION_TIMEOUT:
+            st.session_state.authenticated = False
+            st.session_state.username = None
+            st.session_state.role = None
+            st.session_state.login_time = 0
+            st.warning("Session expired. Please login again.")
+            return False
+    return st.session_state.authenticated
+
+def login_form():
+    """Display login form."""
+    st.title("🔐 Meli Catalog Assistant - Login")
+    
+    with st.form("login_form"):
+        username = st.text_input("Username", placeholder="Enter your username")
+        password = st.text_input("Password", type="password", placeholder="Enter your password")
+        submit_button = st.form_submit_button("Login")
+        
+        if submit_button:
+            if username in USER_CREDENTIALS:
+                stored_hash = USER_CREDENTIALS[username]["password_hash"]
+                if verify_password(password, stored_hash):
+                    st.session_state.authenticated = True
+                    st.session_state.username = username
+                    st.session_state.role = USER_CREDENTIALS[username]["role"]
+                    st.session_state.login_time = time.time()
+                    st.success(f"Welcome {username}!")
+                    st.rerun()
+                else:
+                    st.error("Invalid password")
+            else:
+                st.error("Invalid username")
+
+def logout_button():
+    """Display logout button in sidebar."""
+    if st.sidebar.button("🚪 Logout"):
+        st.session_state.authenticated = False
+        st.session_state.username = None
+        st.session_state.role = None
+        st.session_state.login_time = 0
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Hello! I'm your Meli Catalog Assistant. I can help you search for products using semantic search or track your Servientrega shipments. How can I assist you today?"}
+        ]
+        st.rerun()
 
 # --- Weaviate Configuration ---
 WEAVIATE_AVAILABLE = False
@@ -22,8 +109,8 @@ except ImportError as e:
 
 # --- USE LOCALHOST:8090 (where the data is) ---
 WEAVIATE_CLASS_NAME = "MercadoLibreProduct"
-WEAVIATE_HOST = "localhost"  # ← CONNECT TO HOST, NOT CONTAINER
-WEAVIATE_PORT = 8090         # ← HOST PORT
+WEAVIATE_HOST = "localhost"
+WEAVIATE_PORT = 8090
 
 # --- 1. Chat History Initialization ---
 if "messages" not in st.session_state:
@@ -52,7 +139,6 @@ def check_weaviate_data():
             data = response.json()
             total_count = data.get('totalResults', 0)
             if total_count > 0:
-                # Get exact count
                 count_url = f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}/v1/objects?class={WEAVIATE_CLASS_NAME}&include=classification"
                 count_response = requests.get(count_url, timeout=10)
                 if count_response.status_code == 200:
@@ -69,7 +155,6 @@ def initialize_weaviate_client():
     if not WEAVIATE_AVAILABLE:
         return None, "Weaviate client is not installed", False
     
-    # Complete diagnostic
     connection_ok, connection_msg = test_weaviate_connection()
     if not connection_ok:
         return None, connection_msg, False
@@ -107,13 +192,11 @@ def search_products_semantic(client, query: str, limit: int = 10):
     try:
         collection = client.collections.get(WEAVIATE_CLASS_NAME)
         
-        # Get query embedding using the same ingestion function
         query_vector = get_embedding(query)
         if not query_vector:
             st.error("❌ Could not generate embedding for the query")
             return []
         
-        # Search using vector directly
         response = collection.query.near_vector(
             near_vector=query_vector,
             limit=limit,
@@ -132,7 +215,6 @@ def format_product_display(product):
     
     display_text = f"### 🎯 {props.get('title', 'Product without title')}\n"
     
-    # Main information
     if props.get('character'):
         display_text += f"**🧙 Character:** {props['character']}\n"
     
@@ -142,21 +224,18 @@ def format_product_display(product):
     if props.get('materials'):
         display_text += f"**🔧 Materials:** {props['materials']}\n"
     
-    # Figure specifications
     if props.get('is_articulated'):
         display_text += "**🔄 Type:** Articulated Figure\n"
     
     if props.get('is_collectible'):
         display_text += "**⭐ Collectible:** Yes\n"
     
-    # Dimensions and weight
     if props.get('height_cm') and props['height_cm'] not in ['nan', 'None']:
         display_text += f"**📏 Height:** {props['height_cm']}cm\n"
     
     if props.get('weight_g') and props['weight_g'] not in ['nan', 'None']:
         display_text += f"**⚖️ Weight:** {props['weight_g']}g\n"
     
-    # Search similarity
     if hasattr(product, 'metadata'):
         similarity = product.metadata.distance if hasattr(product.metadata, 'distance') else None
         if similarity:
@@ -188,15 +267,20 @@ def format_search_results(results, query):
     response += "Are you interested in any particular one or would you like to search for something else?"
     return response
 
-def main():
-    """Main Streamlit application."""
-    st.set_page_config(
-        page_title="MercadoLibre Catalog - Vector Search", 
-        layout="wide",
-        page_icon="🛍️"
-    )
-    
+def main_app():
+    """Main application after authentication."""
     st.title("🤖 Meli Catalog Assistant")
+    
+    # Display user info
+    st.sidebar.markdown(f"**👤 User:** {st.session_state.username}")
+    st.sidebar.markdown(f"**🎯 Role:** {st.session_state.role}")
+    
+    # Session timer
+    elapsed_time = time.time() - st.session_state.login_time
+    remaining_time = SESSION_TIMEOUT - elapsed_time
+    minutes_remaining = int(remaining_time // 60)
+    st.sidebar.markdown(f"**⏰ Session expires in:** {minutes_remaining} minutes")
+    
     st.caption("Ask me about products or track a shipment (e.g.: track 2259180939)")
     
     # Sidebar with diagnostics
@@ -235,6 +319,9 @@ def main():
             ]
             st.rerun()
         
+        # Logout button
+        logout_button()
+        
         # Additional information
         st.markdown("### 💡 Information")
         st.markdown("- **Connection:** localhost:8090")
@@ -258,7 +345,6 @@ def main():
             
             # --- HYBRID BRANCHING LOGIC (Search or Tracking) ---
             
-            # 1. Try to detect a Servientrega tracking number (10 digits)
             tracking_number_match = re.search(r'\b(\d{10})\b', prompt)
             
             if tracking_number_match:
@@ -307,7 +393,7 @@ def main():
             st.session_state.messages.append({"role": "assistant", "content": final_response})
 
     # --- Examples and information section ---
-    if len(st.session_state.messages) <= 2:  # Only show if chat is empty
+    if len(st.session_state.messages) <= 2:
         st.markdown("---")
         st.markdown("### 💡 Examples of what you can ask:")
         
@@ -325,6 +411,14 @@ def main():
             st.markdown("- 2259180939")
             st.markdown("- Track 2259180939")
             st.markdown("- Status of 2259180939")
+
+def main():
+    """Main application with authentication check."""
+    # Check authentication
+    if not check_authentication():
+        login_form()
+    else:
+        main_app()
 
 if __name__ == "__main__":
     main()
