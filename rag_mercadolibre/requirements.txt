@@ -11,3 +11,5 @@ openpyxl
 weaviate-client>=4.6.0
 langchain-text-splitters
 langchain-community
+PyPDF2==3.0.1
+python-multipart==0.0.6

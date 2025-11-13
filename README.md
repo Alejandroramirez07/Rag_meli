@@ -1,138 +1,365 @@
-# Rag_meli
- Meli Hybrid Assistant: RAG and Tool-Use Chatbot
+MercadoLibre Catalog Assistant - RAG System
+Project Overview
 
-This project implements a sophisticated hybrid assistant built on Streamlit that combines two key functionalities:
+A sophisticated Retrieval-Augmented Generation (RAG) system that provides intelligent product search and shipment tracking capabilities for MercadoLibre catalog data. The application combines semantic search using vector embeddings with a conversational AI interface and administrative controls.
+Architecture
+Core Components
 
-Retrieval-Augmented Generation (RAG): Answers user questions based on an internal product catalog stored in a ChromaDB vector store.
+    Frontend: Streamlit web application with authentication and real-time chat interface
 
-Tool Use (Function Calling): Automatically detects tracking numbers and executes an external tool (Selenium) to fetch real-time shipment status from the Servientrega website.
+    Vector Database: Weaviate for storing and retrieving product embeddings
 
-The entire application is containerized using Docker Compose for easy deployment and manages a local LLM (Mistral) via Ollama.
+    Embedding Service: Google Gemini AI for generating semantic embeddings
 
- Features
+    External Integration: Servientrega shipment tracking via Selenium automation
 
-Hybrid Intelligence: Seamlessly switches between RAG for catalog queries and a dedicated tool for real-time tracking.
+    Authentication: Role-based access control (Admin/User)
 
-Local LLM: Uses Mistral-7B served via Ollama for fast, private, and contextual responses.
+Data Flow
 
-Conversational Memory: Maintains full chat history, allowing users to ask follow-up questions.
+    Product data ingestion and vectorization
 
-Real-Time Tracking: Integration with servientrega_checker.py (using Selenium) for up-to-date shipment status retrieval (for 10-digit tracking numbers).
+    Semantic search using cosine similarity
 
-Containerized Deployment: Simple two-service deployment using Docker Compose (app and ollama).
+    Hybrid query processing (product search vs shipment tracking)
 
-🛠️ Architecture
+    Real-time conversation history management
 
-The project is structured around three main components orchestrated by LangChain:
+    Administrative system monitoring and control
 
-Component
+Features
+User Features
 
-Technology
+    Natural language product search using semantic similarity
 
-Role
+    Real-time shipment tracking with Servientrega integration
 
-User Interface
+    Conversational chat interface with persistent history
 
-Streamlit
+    Intelligent query routing and intent detection
 
-Provides the web interface and manages session state (chat history).
+Administrative Features
 
-Knowledge Base (RAG)
+    Complete data management (ingestion, validation, cleanup)
 
-Ollama (Mistral) + ChromaDB + HuggingFace Embeddings
+    System health monitoring and service control
 
-Stores the product catalog and retrieves contextually relevant information to augment the LLM's response.
+    User management and access control
 
-Tool
+    Analytics and usage statistics
 
-Selenium / check_servientrega_status
+    Backup and recovery operations
 
-Executes web scraping logic to find the status of a specific tracking number.
+    API configuration management
 
-⚙️ Prerequisites
+Technical Specifications
+Dependencies
 
-You must have the following installed on your system:
+Core Framework
 
-Docker: (Required for containerization).
+    Streamlit 1.28+ - Web application framework
 
-Docker Compose: (Required for multi-service orchestration).
+    Weaviate Client 4.x - Vector database operations
 
-ChromaDB Initialized: You must run your data ingestion script (ingest.py or similar) to generate the ./chroma_db directory before building the Docker image. The Dockerfile copies this directory into the application container.
+    Google Generative AI - Embedding generation
 
-🚀 Setup and Run
+Data Processing
 
-Follow these steps to get the hybrid assistant running locally:
+    Pandas - Data manipulation and analysis
 
-1. Build and Run Services
+    Requests - HTTP client for API calls
 
-From the root directory of the project, use Docker Compose to build the application image and start both the app and ollama services:
+    Python-dotenv - Environment configuration
 
-docker compose up --build -d
+Authentication & Security
 
+    HMAC - Secure password verification
 
-(The --build flag forces a fresh build, ensuring the latest chroma_db is included.)
+    SHA-256 - Password hashing
 
-2. Verify Ollama Model
+    Session-based authentication with timeout
 
-Wait about 30-60 seconds for the ollama service to start and download the mistral model (if it's not already cached).
+External Services
 
-3. Access the Application
+    Selenium - Web automation for shipment tracking
 
-The Streamlit application will be running on port 8501.
+    Docker - Containerized Weaviate deployment
 
-Open your browser and navigate to:
+Configuration
+Environment Variables
+text
 
-http://localhost:8501
+ADMIN_PASSWORD_HASH=sha256_hash_of_admin_password
+USER_PASSWORD_HASH=sha256_hash_of_user_password
+GEMINI_API_KEY=your_google_gemini_api_key
 
+Weaviate Configuration
 
- Usage
+    Host: localhost:8090
 
-The assistant is designed to handle two types of queries:
+    Class: MercadoLibreProduct
 
-A. Catalog Search (RAG)
+    Vectorizer: None (custom embeddings via Gemini)
 
-Ask general questions about the products in the catalog. The system will use ChromaDB to find relevant text chunks and pass them to Mistral for a concise answer.
+    Distance Metric: Cosine similarity
 
-Examples:
+Installation & Setup
+Prerequisites
 
-¿Qué figuras hay de Naruto?
+    Python 3.8+
 
-¿Hay figuras de Dragon Ball?
+    Docker and Docker Compose
 
-B. Shipment Tracking (Tool-Use)
+    Google Gemini API key
 
-The system automatically detects any 10-digit number and assumes it's a Servientrega guide to track.
+Installation Steps
 
-Examples:
+    Clone and Setup Environment
+    bash
 
-rastrea guía 1234567890
+git clone <repository-url>
+cd rag_mercadolibre
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
-por favor, dime el estado del envío con código 9876543210
+Configure Environment
+bash
 
-1112223334 (Just the number is enough)
+# Generate password hashes
+python create_users.py
 
-🛑 Troubleshooting
+# Create .env file with generated hashes
+echo "ADMIN_PASSWORD_HASH=generated_admin_hash" > .env
+echo "USER_PASSWORD_HASH=generated_user_hash" >> .env
+echo "GEMINI_API_KEY=your_gemini_api_key" >> .env
 
-Issue
+Start Weaviate Database
+bash
 
-Cause
+docker compose up -d
 
-Solution
+Ingest Product Data
+bash
 
-Error: ''dict' object has no attribute 'replace''
+python ingest_weaviate.py
 
-LangChain serialization failure between RAG components and Ollama.
+Launch Application
+bash
 
-Ensure main_workflow.py is the latest version, which uses RunnableLambda to explicitly extract question and history strings.
+streamlit run main_workflow.py
 
-Error al configurar la cadena RAG. ¿Está Ollama corriendo...?
+Usage Guide
+Authentication
 
-The ollama service is not running or the mistral model is not downloaded.
+    Access the application at http://localhost:8501
 
-Check docker logs ollama_server. Ensure the container is running and has completed the initial model download.
+    Default credentials:
 
-Tracking fails (ERROR al intentar rastrear...)
+        Admin: username admin, password admin
 
-Selenium failed to connect or website structure changed.
+        User: username user, password user
 
-Check the logs for the meli_asistente_rag container to see the detailed Selenium error.
+Product Search
+
+    Use natural language queries to find products
+
+    Example: "action figures", "cotton underwear", "laptop backpacks"
+
+    Results are ranked by semantic similarity to query
+
+Shipment Tracking
+
+    Enter 10-digit tracking numbers directly
+
+    Example: "2259180939" or "track 2259180939"
+
+    Real-time status retrieval from Servientrega
+
+Administrative Functions
+
+Admin users have access to comprehensive system management tools:
+
+Data Management
+
+    Bulk re-ingestion of product data
+
+    Database validation and cleanup
+
+    Selective re-processing of failed items
+
+System Monitoring
+
+    Real-time health checks
+
+    Performance analytics
+
+    Usage statistics and search analytics
+
+User Management
+
+    Add new users with role assignments
+
+    Access control configuration
+
+Maintenance
+
+    Backup and restore operations
+
+    System diagnostics
+
+    Log viewing and cache management
+
+Data Schema
+Product Object Structure
+python
+
+{
+    "title": "Product title",
+    "category": "Product category",
+    "character": "Character/theme (for collectibles)",
+    "materials": "Construction materials",
+    "is_articulated": boolean,
+    "is_collectible": boolean,
+    "height_cm": "Height in centimeters",
+    "weight_g": "Weight in grams",
+    "vector": [768-dimensional embedding]
+}
+
+API Endpoints
+Internal Weaviate API
+
+    GET /v1/objects?class=MercadoLibreProduct - Retrieve products
+
+    POST /v1/objects - Create product entries
+
+    GET /v1/.well-known/ready - Health check
+
+External Services
+
+    Servientrega Tracking: Mobile API integration via Selenium
+
+    Google Gemini: Embedding generation and AI services
+
+Security Considerations
+
+    Passwords are hashed using SHA-256 with HMAC verification
+
+    Session-based authentication with configurable timeout
+
+    Environment variable configuration for sensitive data
+
+    Input validation and sanitization for all user queries
+
+    Secure container deployment for database services
+
+Performance Characteristics
+
+    Vector search response time: < 2 seconds
+
+    Embedding generation: ~1 second per query
+
+    Shipment tracking: 5-10 seconds (external API dependency)
+
+    Concurrent user support: Limited by Weaviate configuration
+
+Troubleshooting
+Common Issues
+
+Weaviate Connection Failures
+
+    Verify Docker containers are running: docker compose ps
+
+    Check port availability: netstat -an | grep 8090
+
+    Validate Weaviate logs: docker compose logs weaviate
+
+Authentication Problems
+
+    Confirm .env file exists in correct directory
+
+    Verify password hashes match generated values
+
+    Check for session timeout (default: 1 hour)
+
+Search Performance
+
+    Monitor embedding API rate limits
+
+    Check Weaviate resource allocation
+
+    Validate product data completeness
+
+Logs and Monitoring
+
+    Application logs available in Streamlit interface
+
+    Weaviate logs accessible via Docker commands
+
+    System metrics available in admin dashboard
+
+Development
+Extending Functionality
+
+Adding New Product Categories
+
+    Update data ingestion script with new schema
+
+    Modify search functions to handle new fields
+
+    Update chat response formatting
+
+Integrating Additional Services
+
+    Create new service module following existing patterns
+
+    Add route detection logic in main application
+
+    Implement error handling and user feedback
+
+Testing
+
+    Unit tests for embedding generation
+
+    Integration tests for Weaviate operations
+
+    End-to-end testing for user workflows
+
+Deployment Considerations
+Production Requirements
+
+    Secure Weaviate deployment with authentication
+
+    SSL/TLS termination for web interface
+
+    Environment-specific configuration management
+
+    Monitoring and alerting infrastructure
+
+    Regular backup procedures
+
+Scaling Strategies
+
+    Weaviate cluster configuration for high availability
+
+    Load balancing for multiple application instances
+
+    Caching layer for frequent queries
+
+    Database sharding for large product catalogs
+
+License and Attribution
+
+This project utilizes:
+
+    Weaviate vector database (Apache 2.0)
+
+    Google Gemini AI services
+
+    Streamlit web framework (Apache 2.0)
+
+    Servientrega public tracking services
+
+Support and Maintenance
+
+For technical support and maintenance considerations, refer to the individual component documentation and ensure compliance with respective service terms and API usage policies.

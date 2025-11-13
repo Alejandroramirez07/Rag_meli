@@ -1,40 +1,44 @@
 services:
   weaviate:
-    image: semitechnologies/weaviate:1.27.1 
+    image: semitechnologies/weaviate:1.27.1
     container_name: rag_mercadolibre_weaviate
     ports:
-      - "8090:8080" 
-      - "50051:50051" 
+      - "8090:8080"
+      - "50051:50051"
     environment:
-      QUERY_DEFAULTS_LIMIT: 4300
-      AUTHENTICATION_APIKEY_ENABLED: 'false' 
+      QUERY_DEFAULTS_LIMIT: 5000
+      AUTHENTICATION_APIKEY_ENABLED: 'false'
       PERSISTENCE_ENABLED: 'true'
-      DEFAULT_VECTORIZER_MODULE: 'none' 
+      DEFAULT_VECTORIZER_MODULE: 'none'
       ENABLE_MODULES: 'text2vec-google'
-      GOOGLE_API_KEY: ${GEMINI_API_KEY} 
+      GOOGLE_API_KEY: ${GEMINI_API_KEY}
       CLUSTER_HOSTNAME: 'node1'
     volumes:
-      - weaviate_data:/var/lib/weaviate 
+      - weaviate_data:/var/lib/weaviate
     networks:
       - rag_network
 
   meli_assistant_app:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: rag_mercadolibre_app
     ports:
       - "8501:8501"
     volumes:
       - .:/app
+      - /app/__pycache__
+      - /app/.streamlit
     depends_on:
       - weaviate
     environment:
-      
       WEAVIATE_URL: "http://weaviate:8080"
       WEAVIATE_HOST_DOCKER: "weaviate"
       WEAVIATE_PORT_DOCKER: 8080
-      
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-    command: streamlit run main_workflow.py
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH}
+      USER_PASSWORD_HASH: ${USER_PASSWORD_HASH}
+    command: streamlit run main_workflow.py --server.port=8501 --server.address=0.0.0.0
     networks:
       - rag_network
 
