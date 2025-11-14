@@ -1,4 +1,3 @@
-# tests/test_element_finder.py
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -13,8 +12,8 @@ class ElementFinder:
             "input[placeholder*='message']",
             "input[placeholder*='question']",
             "input[placeholder*='type']",
-            "textarea",  # Sometimes it's a textarea
-            "//input | //textarea",  # Any input or textarea
+            "textarea",  
+            "//input | //textarea", 
         ]
         
         for selector in selectors:
@@ -32,7 +31,6 @@ class ElementFinder:
             except:
                 continue
         
-        # Take screenshot for debugging
         driver.save_screenshot("chat_input_not_found.png")
         raise Exception("Chat input not found with any selector")
     
@@ -40,8 +38,7 @@ class ElementFinder:
     def find_sidebar_elements(driver, timeout=10):
         """Find sidebar elements"""
         elements = {}
-        
-        # User info
+      
         user_selectors = [
             "//*[contains(text(), 'User:')]",
             "//*[contains(text(), 'admin')]",

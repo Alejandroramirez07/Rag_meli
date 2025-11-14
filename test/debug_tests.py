@@ -1,9 +1,7 @@
-# tests/debug_tests.py
 import sys
 import os
 from pathlib import Path
 
-# Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -16,7 +14,7 @@ def debug_setup():
     print(f"   Project root: {project_root}")
     
     print("\n2. Python Path:")
-    for i, path in enumerate(sys.path[:5]):  # Show first 5 paths
+    for i, path in enumerate(sys.path[:5]):  
         print(f"   {i+1}. {path}")
     
     print("\n3. Test Files in tests/ directory:")
